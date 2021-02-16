@@ -1,0 +1,205 @@
+// Fill out your copyright notice in the Description page of Project Settings.
+
+
+#include "ChunkGenerator.h"
+#include "SimplexNoiseBPLibrary.h"
+#include "Kismet/GameplayStatics.h"
+
+// Sets default values
+AChunkGenerator::AChunkGenerator()
+{
+	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
+	PrimaryActorTick.bCanEverTick = true;
+
+}
+
+// Called when the game starts or when spawned
+void AChunkGenerator::BeginPlay()
+{
+	Super::BeginPlay();
+
+	playerCharacter = (APlayerCharacter*)UGameplayStatics::GetPlayerCharacter(GetWorld(), 0);
+	initChunks = true;
+	renderDistSq = renderDist * renderDist;
+}
+
+EBlockType AChunkGenerator::SetBlockType(int x, int y, int z) {
+	int noiseZ = USimplexNoiseBPLibrary::GetSimplexNoise2D_EX(x, y, 2.3f, 0.4f, 3, 0.0001f) * 10;
+	if (z > noiseZ && z > 1) {
+		return EBlockType::AIR;
+	}
+	else {
+		return EBlockType::DIRT;
+	}
+}
+
+void AChunkGenerator::GenChunk(ChunkPos cp, TMap<ChunkPos, TPair<UProceduralMeshComponent*, EBlockType[width + 2][width + 2][height]>>& genChunks) {
+
+	FVector chunkOffset = FVector(cp.x * blockSize * width, cp.y * blockSize * width, 0.0f);
+	UProceduralMeshComponent* newChunkMesh = GetWorld()->SpawnActor<UProceduralMeshComponent>(chunkOffset, FRotator(0.0f, 0.0f, 0.0f), FActorSpawnParameters());
+	TPair<UProceduralMeshComponent*, EBlockType[width + 2][width + 2][height]> chunkInfo;
+	chunkInfo.Key = newChunkMesh;
+
+	int maxZ = 0;
+
+	for (int x = 0; x < width + 2; x++) {
+		int blockX = (x - 1) * blockSize;
+		for (int y = 0; y < width + 2; y++) {
+			int blockY = (y - 1) * blockSize;
+			for (int z = 0; z < height; z++) {
+				chunkInfo.Value[x][y][z] = SetBlockType(chunkOffset.X + blockX, chunkOffset.Y + blockY, z);
+
+				if (chunkInfo.Value[x][y][z] == EBlockType::DIRT && z > maxZ) {
+					maxZ = z;
+				}
+			}
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("chunkOffset: %d,%d, maxZ: %d"), cp.x * blockSize * width, cp.y * blockSize * width, maxZ);
+
+	// newChunkMesh = GenMesh(chunkInfo);
+	genChunks.Add(cp, chunkInfo);
+}
+
+// Called every frame
+void AChunkGenerator::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+
+	ChunkPos lastPos = curPos;
+	curPos = ChunkPos((int)(playerCharacter->GetActorLocation().X / blockSize) / width, (int)(playerCharacter->GetActorLocation().Y / blockSize) / width);
+
+	// TODO: 
+	if (initChunks || curPos.x != lastPos.x || curPos.y != lastPos.y) {
+		if (initChunks) initChunks = false;
+
+		for (int xOffset = -renderDist; xOffset <= renderDist; xOffset++) {
+			for (int yOffset = -renderDist; yOffset <= renderDist; yOffset++) {
+
+				if (xOffset * xOffset + yOffset * yOffset <= renderDistSq) {
+					ChunkPos curOffset = curPos + ChunkPos(xOffset, yOffset);
+
+					if (!generatedChunks.Contains(curOffset)) {
+
+						UE_LOG(LogTemp, Log, TEXT("gen"));
+						GenChunk(curOffset, generatedChunks);
+						//visibleChunks.Add(curOffset, generatedChunks[curOffset]);
+					}
+					/*else if (generatedChunks.Contains(curOffset) &&
+						!visibleChunks.Contains(curOffset)) {
+
+						UE_LOG(LogTemp, Log, TEXT("readd"));
+						visibleChunks.Add(curOffset, generatedChunks[curOffset]);
+					}*/
+				}
+			}
+		}
+
+		/*for (const TPair<ChunkPos, AChunk*>& curChunk : visibleChunks) {
+			curChunk.Key;
+			curChunk.Value;
+		}*/
+	}
+}
+
+// Chunk generation stuff below //
+
+void AChunkGenerator::AddFace(FVector blockPos, EFaceDir faceDir, EBlockType blockType, int index, 
+								TArray<FVector>& Vertices, TArray<int32>& Triangles, TArray<FVector2D>& UVs) {
+	switch (faceDir) {
+	case EFaceDir::UP:
+		Vertices.Add((blockPos + FVector(0.0f, 0.0f, 1.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(0.0f, 1.0f, 1.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(1.0f, 1.0f, 1.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(1.0f, 0.0f, 1.0f)) * blockSize);
+		break;
+
+	case EFaceDir::DOWN:
+		Vertices.Add((blockPos + FVector(1.0f, 0.0f, 0.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(1.0f, 1.0f, 0.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(0.0f, 1.0f, 0.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(0.0f, 0.0f, 0.0f)) * blockSize);
+		break;
+
+	case EFaceDir::LEFT:
+		Vertices.Add((blockPos + FVector(0.0f, 0.0f, 0.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(0.0f, 1.0f, 0.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(0.0f, 1.0f, 1.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(0.0f, 0.0f, 1.0f)) * blockSize);
+		break;
+
+	case EFaceDir::RIGHT:
+		Vertices.Add((blockPos + FVector(1.0f, 0.0f, 1.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(1.0f, 1.0f, 1.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(1.0f, 1.0f, 0.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(1.0f, 0.0f, 0.0f)) * blockSize);
+		break;
+
+	case EFaceDir::FRONT:
+		Vertices.Add((blockPos + FVector(0.0f, 0.0f, 0.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(0.0f, 0.0f, 1.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(1.0f, 0.0f, 1.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(1.0f, 0.0f, 0.0f)) * blockSize);
+		break;
+
+	case EFaceDir::BACK:
+		Vertices.Add((blockPos + FVector(0.0f, 1.0f, 1.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(0.0f, 1.0f, 0.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(1.0f, 1.0f, 0.0f)) * blockSize);
+		Vertices.Add((blockPos + FVector(1.0f, 1.0f, 1.0f)) * blockSize);
+		break;
+	}
+
+	Triangles.Add(0 + index * 4);
+	Triangles.Add(1 + index * 4);
+	Triangles.Add(2 + index * 4);
+	Triangles.Add(3 + index * 4);
+	Triangles.Add(0 + index * 4);
+	Triangles.Add(2 + index * 4);
+
+	UVs.Add(FVector2D(0.0f, 0.0f));
+	UVs.Add(FVector2D(1.0f, 0.0f));
+	UVs.Add(FVector2D(1.0f, 1.0f));
+	UVs.Add(FVector2D(0.0f, 1.0f));
+}
+
+UProceduralMeshComponent* AChunkGenerator::GenMesh(TPair<UProceduralMeshComponent*, EBlockType[width + 2][width + 2][height]> chunkInfo) {
+
+	UProceduralMeshComponent* ChunkMesh = chunkInfo.Key;
+	ChunkMesh->ClearAllMeshSections();
+
+	int index = 0;
+
+	TArray<FVector> Vertices;
+	TArray<int32> Triangles;
+	TArray<FVector2D> UVs;
+	for (int x = 1; x <= width; x++) {
+		for (int y = 1; y <= width; y++) {
+			for (int z = 0; z < height; z++) {
+
+				// If not air and surrounded by air, gen block face
+				if (chunkInfo.Value[x][y][z] != EBlockType::AIR) {
+					FVector blockPos = FVector(x - 1, y - 1, z);
+
+					if (z + 1 < height && chunkInfo.Value[x][y][z + 1] == EBlockType::AIR)
+						AddFace(blockPos, EFaceDir::UP, chunkInfo.Value[x][y][z], index++, Vertices, Triangles, UVs);
+					if (z - 1 >= 0 && chunkInfo.Value[x][y][z - 1] == EBlockType::AIR)
+						AddFace(blockPos, EFaceDir::DOWN, chunkInfo.Value[x][y][z], index++, Vertices, Triangles, UVs);
+					if (chunkInfo.Value[x - 1][y][z] == EBlockType::AIR)
+						AddFace(blockPos, EFaceDir::LEFT, chunkInfo.Value[x][y][z], index++, Vertices, Triangles, UVs);
+					if (chunkInfo.Value[x + 1][y][z] == EBlockType::AIR)
+						AddFace(blockPos, EFaceDir::RIGHT, chunkInfo.Value[x][y][z], index++, Vertices, Triangles, UVs);
+					if (chunkInfo.Value[x][y - 1][z] == EBlockType::AIR)
+						AddFace(blockPos, EFaceDir::FRONT, chunkInfo.Value[x][y][z], index++, Vertices, Triangles, UVs);
+					if (chunkInfo.Value[x][y + 1][z] == EBlockType::AIR)
+						AddFace(blockPos, EFaceDir::BACK, chunkInfo.Value[x][y][z], index++, Vertices, Triangles, UVs);
+				}
+			}
+		}
+	}
+
+	ChunkMesh->CreateMeshSection_LinearColor(0, Vertices, Triangles, TArray<FVector>(), UVs, TArray<FLinearColor>(), TArray<FProcMeshTangent>(), true);
+
+	return ChunkMesh;
+}
